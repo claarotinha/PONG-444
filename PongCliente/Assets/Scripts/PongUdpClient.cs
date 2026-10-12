@@ -139,6 +139,25 @@ public class PongUdpClient : MonoBehaviour
         }
     }
 
+    public void ConnectTo(string ip)
+    {
+        if (!IPAddress.TryParse(ip, out IPAddress address))
+        {
+            Debug.LogWarning("IP invalido: " + ip);
+            return;
+        }
+        if (playerId >= 0) Send("LEAVE");
+        serverIp = ip;
+        server = new IPEndPoint(address, serverPort);
+        sessionToken = Guid.NewGuid().ToString("N");
+        playerId = -1;
+        matchStatus = "CONNECTING";
+        connectedPlayers = 0;
+        lastPacket = Time.realtimeSinceStartup;
+        nextJoin = 0f;
+        Debug.Log("Conectando a " + server);
+    }
+
     public void RequestRestart() { if (playerId >= 0) Send("RESTART"); }
 
     private void Send(string packet)
