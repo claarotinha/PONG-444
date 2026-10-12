@@ -1,16 +1,20 @@
 using UnityEngine;
 
-// Interface provisória funcional, criada em execução sem editar SampleScene.
+// Arena 2x2 gerada em tempo de execução: 2 raquetes azuis à esquerda,
+// 2 douradas à direita. Não depende de objetos da SampleScene.
 public class PongGameView : MonoBehaviour
 {
-    public PongUdpClient client;
+    private PongUdpClient client;
     private Sprite square;
     private Transform ball;
     private readonly Transform[] paddles = new Transform[4];
-    private GUIStyle title, label;
-    private Transform ballHalo;
-    private readonly Transform[] paddleHalos = new Transform[4];
+    private readonly Transform[] highlights = new Transform[4];
+    private Camera gameCamera;
+    private GUIStyle heading, textStyle, scoreStyle;
     private string ip = "127.0.0.1";
+    private bool ipLoaded;
+    private static readonly Color Blue = new Color(0.12f, 0.82f, 1f);
+    private static readonly Color Gold = new Color(1f, 0.72f, 0.22f);
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Boot()
@@ -22,127 +26,144 @@ public class PongGameView : MonoBehaviour
     private void Start()
     {
         client = FindFirstObjectByType<PongUdpClient>();
-        ip = client != null ? client.serverIp : ip;
-        Texture2D texture = Texture2D.whiteTexture;
-        square = Sprite.Create(texture, new Rect(0, 0, 1, 1), new Vector2(0.5f, 0.5f), 1f);
-        Camera cam = Camera.main;
-        if (cam == null)
+        // Texture2D.whiteTexture tem 1 pixel; 1 pixel por unidade produz quadrados 1x1.
+        square = Sprite.Create(Texture2D.whiteTexture, new Rect(0, 0, 1, 1),
+            new Vector2(0.5f, 0.5f), 1f);
+        gameCamera = Camera.main;
+        if (gameCamera == null)
         {
-            GameObject obj = new GameObject("Pong Camera");
-            cam = obj.AddComponent<Camera>();
-            obj.tag = "MainCamera";
+            GameObject cameraObject = new GameObject("Pong Camera");
+            cameraObject.tag = "MainCamera";
+            gameCamera = cameraObject.AddComponent<Camera>();
         }
-        cam.orthographic = true;
-        cam.orthographicSize = 5.5f;
-        cam.transform.position = new Vector3(0, 0, -10);
-        cam.backgroundColor = new Color(0.035f, 0.055f, 0.10f);
-        cam.clearFlags = CameraClearFlags.SolidColor;
-        Create("Arena", new Vector3(16.2f, 9f, 1), new Color(0.07f, 0.10f, 0.17f)).position = new Vector3(0, 0, 2);
-        Create("Lado azul", new Vector3(8f, 9f, 1), new Color(0.08f, 0.16f, 0.23f)).position = new Vector3(-4, 0, 1);
-        Create("Lado dourado", new Vector3(8f, 9f, 1), new Color(0.20f, 0.14f, 0.08f)).position = new Vector3(4, 0, 1);
-        ballHalo = Create("Brilho bola", new Vector3(0.52f, 0.52f, 1), new Color(0.2f, 0.65f, 1f, 0.5f));
-        ball = Create("Bola", new Vector3(0.3f, 0.3f, 1), Color.white);
+        gameCamera.orthographic = true;
+        gameCamera.transform.position = new Vector3(0, 0, -10);
+        gameCamera.backgroundColor = new Color(0.025f, 0.04f, 0.08f);
+        gameCamera.clearFlags = CameraClearFlags.SolidColor;
+        gameCamera.cullingMask = ~0;
+        FitCamera();
+
+        Create("Arena", new Vector2(16.2f, 9f), new Color(0.07f, 0.10f, 0.16f), 0, 0, -10);
+        Create("Area azul", new Vector2(8f, 9f), new Color(0.07f, 0.17f, 0.25f), -4, 0, -9);
+        Create("Area dourada", new Vector2(8f, 9f), new Color(0.20f, 0.14f, 0.07f), 4, 0, -9);
+        Create("Borda superior", new Vector2(16.3f, 0.12f), Color.white, 0, 4.55f, 1);
+        Create("Borda inferior", new Vector2(16.3f, 0.12f), Color.white, 0, -4.55f, 1);
+        for (int n = -4; n <= 4; n++)
+            Create("Divisoria " + n, new Vector2(0.07f, 0.48f),
+                new Color(0.65f, 0.75f, 0.85f), 0, n, 1);
+        ball = Create("Bola", new Vector2(0.34f, 0.34f), Color.white, 0, 0, 4);
         for (int i = 0; i < 4; i++)
         {
-            Color team = i < 2 ? new Color(0.1f, 0.8f, 1f) : new Color(1f, 0.7f, 0.15f);
-            paddleHalos[i] = Create("Brilho raquete " + (i + 1), new Vector3(0.39f, 1.54f, 1), team * 0.55f);
-            paddles[i] = Create("Raquete " + (i + 1), new Vector3(0.25f, 1.4f, 1), team);
+            float x = i < 2 ? -7.4f : 7.4f;
+            float y = i % 2 == 0 ? 2f : -2f;
+            Color team = i < 2 ? Blue : Gold;
+            highlights[i] = Create("Contorno Jogador " + (i + 1),
+                new Vector2(0.42f, 1.55f), Color.white, x, y, 2);
+            paddles[i] = Create("Raquete Jogador " + (i + 1),
+                new Vector2(0.27f, 1.4f), team, x, y, 3);
         }
-        Create("Parede superior", new Vector3(16.4f, 0.12f, 1), Color.gray).position = new Vector3(0, 4.6f, 0);
-        Create("Parede inferior", new Vector3(16.4f, 0.12f, 1), Color.gray).position = new Vector3(0, -4.6f, 0);
-        for (int i = -4; i <= 4; i++)
-            Create("Linha central", new Vector3(0.07f, 0.5f, 1), Color.gray).position = new Vector3(0, i, 0);
-        title = new GUIStyle(GUI.skin.label) { fontSize = 24, alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
-        title.normal.textColor = Color.white;
-        label = new GUIStyle(GUI.skin.label) { fontSize = 17, alignment = TextAnchor.MiddleCenter };
-        label.normal.textColor = Color.white;
     }
 
-    private Transform Create(string name, Vector3 scale, Color color)
+    private Transform Create(string name, Vector2 size, Color color, float x, float y, int order)
     {
         GameObject obj = new GameObject(name);
+        obj.transform.SetParent(transform);
+        obj.transform.position = new Vector3(x, y, 0);
+        obj.transform.localScale = new Vector3(size.x, size.y, 1);
         SpriteRenderer renderer = obj.AddComponent<SpriteRenderer>();
         renderer.sprite = square;
         renderer.color = color;
-        renderer.sortingOrder = name == "Arena" || name.StartsWith("Lado") ? -10
-            : name.StartsWith("Brilho") ? 0 : 1;
-        obj.transform.localScale = scale;
+        renderer.sortingOrder = order;
         return obj.transform;
+    }
+
+    private void FitCamera()
+    {
+        if (gameCamera == null) return;
+        // A largura do campo é 16 unidades. Evita cortar as raquetes em Free Aspect.
+        float aspect = Mathf.Max(0.1f, (float)Screen.width / Mathf.Max(1, Screen.height));
+        gameCamera.orthographicSize = Mathf.Max(5.15f, 9f / aspect);
     }
 
     private void Update()
     {
-        if (client == null) { client = FindFirstObjectByType<PongUdpClient>(); return; }
-        ball.position = new Vector3(client.ballPosition.x, client.ballPosition.y, 0);
-        ballHalo.position = ball.position;
+        FitCamera();
+        if (client == null) client = FindFirstObjectByType<PongUdpClient>();
+        if (client == null) return;
+        if (!ipLoaded) { ip = client.serverIp; ipLoaded = true; }
+        if (ball != null)
+            ball.position = new Vector3(client.ballPosition.x, client.ballPosition.y, 0);
         for (int i = 0; i < 4; i++)
         {
-            paddles[i].position = new Vector3(i < 2 ? -7.4f : 7.4f, client.paddlePositions[i], 0);
-            paddleHalos[i].position = paddles[i].position;
+            if (paddles[i] == null || highlights[i] == null) continue;
+            float y = client.playerId >= 0 && client.paddlePositions != null && client.paddlePositions.Length == 4
+                ? client.paddlePositions[i] : (i % 2 == 0 ? 2f : -2f);
+            Vector3 position = new Vector3(i < 2 ? -7.4f : 7.4f, y, 0);
+            paddles[i].position = position;
+            highlights[i].position = position;
         }
+    }
+
+    private void Styles()
+    {
+        if (heading != null) return;
+        heading = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 24, alignment = TextAnchor.MiddleCenter,
+            fontStyle = FontStyle.Bold
+        };
+        heading.normal.textColor = Color.white;
+        textStyle = new GUIStyle(GUI.skin.label) { fontSize = 16, alignment = TextAnchor.MiddleCenter };
+        textStyle.normal.textColor = Color.white;
+        scoreStyle = new GUIStyle(heading) { fontSize = 28 };
     }
 
     private void OnGUI()
     {
         if (client == null) return;
+        Styles();
         float w = Screen.width, h = Screen.height;
-        bool playing = client.matchStatus == "PLAYING";
-        bool finished = client.matchStatus == "FINISHED";
-        bool waiting = client.matchStatus == "WAITING";
-        bool connecting = client.matchStatus == "CONNECTING";
+        GUI.Label(new Rect(w / 2 - 220, 4, 115, 35), "AZUL", textStyle);
+        GUI.Label(new Rect(w / 2 + 105, 4, 115, 35), "DOURADO", textStyle);
+        GUI.Label(new Rect(w / 2 - 105, 0, 210, 43),
+            client.leftScore + "  :  " + client.rightScore, scoreStyle);
 
-        GUI.Label(new Rect(w / 2 - 230, 5, 120, 35), "AZUL", label);
-        GUI.Label(new Rect(w / 2 + 110, 5, 120, 35), "DOURADO", label);
-        GUI.Label(new Rect(w / 2 - 110, 5, 220, 40),
-            client.leftScore + "    :    " + client.rightScore, title);
-
-        if (playing)
+        if (client.matchStatus == "PLAYING")
         {
-            GUI.Label(new Rect(w / 2 - 280, 45, 560, 30),
-                "Equipe " + (client.playerId < 2 ? "AZUL" : "AMARELA") +
-                "  |  Jogador " + (client.playerId + 1) + "  |  W/S ou setas", label);
+            GUI.Label(new Rect(w / 2 - 260, 45, 520, 28),
+                "Jogador " + (client.playerId + 1) + " - Equipe " +
+                (client.playerId < 2 ? "AZUL" : "DOURADA") + " | W/S ou setas", textStyle);
             return;
         }
 
-        Rect panel = new Rect(w / 2 - 240, h / 2 - 145, 480, 290);
+        float pw = Mathf.Min(480, w - 20);
+        Rect panel = new Rect((w - pw) / 2, Mathf.Max(55, (h - 270) / 2), pw, 270);
         GUI.Box(panel, "");
-        if (finished)
+        if (client.matchStatus == "FINISHED")
         {
-            string winner = client.leftScore > client.rightScore ? "AZUL" : "AMARELA";
-            GUI.Label(new Rect(panel.x + 20, panel.y + 25, 440, 40),
-                "VITORIA DA EQUIPE " + winner, title);
-            GUI.Label(new Rect(panel.x + 20, panel.y + 85, 440, 30),
-                "Placar final: " + client.leftScore + " x " + client.rightScore, label);
-            if (GUI.Button(new Rect(panel.x + 120, panel.y + 155, 240, 45), "JOGAR NOVAMENTE"))
-                client.RequestRestart();
-            GUI.Label(new Rect(panel.x + 20, panel.y + 225, 440, 25),
-                "A nova partida comeca quando os 4 estiverem conectados.", label);
+            GUI.Label(new Rect(panel.x + 10, panel.y + 20, pw - 20, 40),
+                "VITORIA DA EQUIPE " + (client.leftScore > client.rightScore ? "AZUL" : "DOURADA"), heading);
+            GUI.Label(new Rect(panel.x + 10, panel.y + 75, pw - 20, 32),
+                "Resultado: " + client.leftScore + " x " + client.rightScore, textStyle);
+            if (GUI.Button(new Rect(panel.x + pw / 2 - 100, panel.y + 140, 200, 45),
+                "JOGAR NOVAMENTE")) client.RequestRestart();
             return;
         }
-
-        GUI.Label(new Rect(panel.x + 20, panel.y + 18, 440, 40),
-            waiting ? "SALA DE ESPERA" : "PONG 2 CONTRA 2", title);
-        GUI.Label(new Rect(panel.x + 20, panel.y + 68, 440, 30),
-            waiting ? "Jogadores conectados: " + client.connectedPlayers + " / 4"
-                    : "Informe o IP do servidor para entrar na partida.", label);
+        bool waiting = client.matchStatus == "WAITING";
+        GUI.Label(new Rect(panel.x + 10, panel.y + 16, pw - 20, 40),
+            waiting ? "SALA DE ESPERA" : "PONG 2 CONTRA 2", heading);
+        GUI.Label(new Rect(panel.x + 10, panel.y + 65, pw - 20, 30),
+            waiting ? "Jogadores: " + client.connectedPlayers + " / 4" :
+                "Conecte-se ao servidor para jogar", textStyle);
         if (waiting)
-        {
-            GUI.Label(new Rect(panel.x + 20, panel.y + 110, 440, 30),
+            GUI.Label(new Rect(panel.x + 10, panel.y + 100, pw - 20, 28),
                 "Voce e o jogador " + (client.playerId + 1) +
-                " - equipe " + (client.playerId < 2 ? "AZUL" : "AMARELA"), label);
-            GUI.Label(new Rect(panel.x + 20, panel.y + 145, 440, 30),
-                "A partida comeca automaticamente com 4 jogadores.", label);
-        }
-        else if (connecting)
-        {
-            GUI.Label(new Rect(panel.x + 20, panel.y + 125, 440, 30),
-                "Conectando... mantenha o servidor aberto.", label);
-        }
-        GUI.Label(new Rect(panel.x + 50, panel.y + 210, 90, 28), "IP:");
-        ip = GUI.TextField(new Rect(panel.x + 135, panel.y + 210, 170, 28), ip);
-        if (GUI.Button(new Rect(panel.x + 315, panel.y + 210, 115, 28), "CONECTAR"))
-            client.ConnectTo(ip);
-        GUI.Label(new Rect(panel.x + 20, panel.y + 250, 440, 25),
-            "Servidor primeiro  |  Porta UDP 7777", label);
+                " - equipe " + (client.playerId < 2 ? "AZUL" : "DOURADA"), textStyle);
+        GUI.Label(new Rect(panel.x + 12, panel.y + 170, 70, 30), "IP:", textStyle);
+        ip = GUI.TextField(new Rect(panel.x + 82, panel.y + 170, pw - 215, 30), ip);
+        if (GUI.Button(new Rect(panel.x + pw - 125, panel.y + 170, 115, 30), "CONECTAR"))
+            client.ConnectTo(ip.Trim());
+        GUI.Label(new Rect(panel.x + 10, panel.y + 215, pw - 20, 28),
+            "A partida comeca com quatro jogadores | UDP 7777", textStyle);
     }
 }
