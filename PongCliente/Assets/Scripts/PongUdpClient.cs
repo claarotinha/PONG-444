@@ -4,8 +4,10 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using UnityEngine;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
 
-// Cliente UDP. Sem Canvas; acompanha estado no Console do Unity.
 public class PongUdpClient : MonoBehaviour
 {
     public string serverIp = "127.0.0.1";
@@ -14,14 +16,17 @@ public class PongUdpClient : MonoBehaviour
     public string matchStatus = "CONNECTING";
     public int connectedPlayers, leftScore, rightScore;
     public Vector2 ballPosition;
-    public readonly float[] paddlePositions = new float[4];
+    public float[] paddlePositions = new float[4];
+    public bool useKeyboard = true;
+    [Range(-1, 1)] public int simulatedDirection;
 
     private UdpClient udp;
     private IPEndPoint server;
-    private float nextJoin, nextInput, lastPacket;
+    private string sessionToken;
+    private float nextJoin, nextInput, lastPacket, nextDeniedLog;
     private int previousPlayers = -1;
     private string previousStatus = "";
-    private readonly CultureInfo ci = CultureInfo.InvariantCulture;
+    private readonly CultureInfo culture = CultureInfo.InvariantCulture;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Boot()
@@ -32,14 +37,15 @@ public class PongUdpClient : MonoBehaviour
 
     private void Start()
     {
+        sessionToken = Guid.NewGuid().ToString("N");
         try
         {
             server = new IPEndPoint(IPAddress.Parse(serverIp), serverPort);
             udp = new UdpClient(0);
             udp.Client.Blocking = false;
-            Debug.Log("CLIENTE UDP: tentando conectar a " + server);
+            Debug.Log("Conectando ao servidor UDP " + server);
         }
-        catch (Exception ex) { Debug.LogError("Erro ao iniciar cliente: " + ex.Message); enabled = false; }
+        catch (Exception e) { Debug.LogError("Conexão UDP: " + e.Message); enabled = false; }
     }
 
     private void Update()
@@ -50,53 +56,81 @@ public class PongUdpClient : MonoBehaviour
             try
             {
                 IPEndPoint from = new IPEndPoint(IPAddress.Any, 0);
-                string message = Encoding.UTF8.GetString(udp.Receive(ref from));
-                if (from.Equals(server)) Receive(message);
+                string packet = Encoding.UTF8.GetString(udp.Receive(ref from));
+                if (from.Equals(server)) Receive(packet);
             }
-            catch (SocketException) { break; }
-            catch (Exception ex) { Debug.LogWarning("Pacote UDP ignorado: " + ex.Message); }
+            catch (Exception e) { Debug.LogWarning("Recepção UDP: " + e.Message); }
         }
-        if (Time.realtimeSinceStartup - lastPacket > 5f && playerId >= 0)
+        if (playerId >= 0 && Time.realtimeSinceStartup - lastPacket > 5f)
         {
-            Debug.LogWarning("Conexão perdida; tentando reconectar.");
             playerId = -1; matchStatus = "CONNECTING";
+            Debug.LogWarning("Servidor sem resposta; reconectando.");
         }
         if (playerId < 0 && Time.realtimeSinceStartup >= nextJoin)
         {
-            Send("JOIN"); nextJoin = Time.realtimeSinceStartup + 1f;
+            Send("JOIN|" + sessionToken);
+            nextJoin = Time.realtimeSinceStartup + 1f;
         }
         if (playerId >= 0 && Time.realtimeSinceStartup >= nextInput)
         {
-            // Setas ou W/S, conforme o sistema de entrada clássico.
-            int direction = (Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.W) ? 1 : 0)
-                          - (Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.S) ? 1 : 0);
-            Send("INPUT|" + direction);
+            Send("INPUT|" + Direction());
             nextInput = Time.realtimeSinceStartup + 0.05f;
         }
     }
 
-    private void Receive(string message)
+    private int Direction()
     {
-        if (message.Length > 256) return;
-        string[] p = message.Split('|');
+        if (!useKeyboard) return Mathf.Clamp(simulatedDirection, -1, 1);
+#if ENABLE_INPUT_SYSTEM
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null) return 0;
+        bool up = keyboard.upArrowKey.isPressed || keyboard.wKey.isPressed;
+        bool down = keyboard.downArrowKey.isPressed || keyboard.sKey.isPressed;
+        return (up ? 1 : 0) - (down ? 1 : 0);
+#elif ENABLE_LEGACY_INPUT_MANAGER
+        return (Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.W) ? 1 : 0)
+            - (Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.S) ? 1 : 0);
+#else
+        return 0;
+#endif
+    }
+
+    private void Receive(string packet)
+    {
+        if (packet.Length > 256) return;
+        string[] p = packet.Split('|');
         lastPacket = Time.realtimeSinceStartup;
-        if (p[0] == "WELCOME" && p.Length == 2 && int.TryParse(p[1], out int id))
+        if (p[0] == "WELCOME" && p.Length == 2 && int.TryParse(p[1], out int id) && id >= 0 && id < 4)
         {
-            playerId = id; Debug.Log("Conectado! Você é o jogador " + (id + 1)); return;
+            if (playerId != id) Debug.Log("Conectado como jogador " + (id + 1));
+            playerId = id; return;
         }
-        if (p[0] == "DENY") { Debug.LogWarning("Servidor recusou conexão: " + message); return; }
-        if (p[0] == "END" && p.Length == 2) { matchStatus = "FINISHED"; Debug.Log("Fim de partida! Equipe vencedora: " + (p[1] == "0" ? "esquerda" : "direita")); return; }
+        if (p[0] == "DENY")
+        {
+            if (Time.realtimeSinceStartup >= nextDeniedLog)
+            {
+                Debug.LogWarning("Entrada recusada: " + packet);
+                nextDeniedLog = Time.realtimeSinceStartup + 5f;
+            }
+            return;
+        }
+        if (p[0] == "END" && p.Length == 2)
+        {
+            matchStatus = "FINISHED";
+            Debug.Log("Equipe vencedora: " + (p[1] == "0" ? "esquerda" : "direita"));
+            return;
+        }
         if (p[0] != "STATE" || p.Length != 11) return;
         if (!int.TryParse(p[2], out int count) ||
-            !float.TryParse(p[3], NumberStyles.Float, ci, out float bx) ||
-            !float.TryParse(p[4], NumberStyles.Float, ci, out float by)) return;
-        float[] y = new float[4];
+            !float.TryParse(p[3], NumberStyles.Float, culture, out float bx) ||
+            !float.TryParse(p[4], NumberStyles.Float, culture, out float by)) return;
+        float[] positions = new float[4];
         for (int i = 0; i < 4; i++)
-            if (!float.TryParse(p[5 + i], NumberStyles.Float, ci, out y[i])) return;
+            if (!float.TryParse(p[5 + i], NumberStyles.Float, culture, out positions[i])) return;
         if (!int.TryParse(p[9], out int a) || !int.TryParse(p[10], out int b)) return;
         matchStatus = p[1]; connectedPlayers = count;
         ballPosition = new Vector2(bx, by);
-        Array.Copy(y, paddlePositions, 4);
+        Array.Copy(positions, paddlePositions, 4);
         leftScore = a; rightScore = b;
         if (count != previousPlayers || matchStatus != previousStatus)
         {
@@ -105,16 +139,18 @@ public class PongUdpClient : MonoBehaviour
         }
     }
 
-    private void Send(string message)
+    public void RequestRestart() { if (playerId >= 0) Send("RESTART"); }
+
+    private void Send(string packet)
     {
         if (udp == null || server == null) return;
-        try { byte[] bytes = Encoding.UTF8.GetBytes(message); udp.Send(bytes, bytes.Length, server); }
-        catch (Exception ex) { Debug.LogWarning("Falha ao enviar UDP: " + ex.Message); }
+        try { byte[] data = Encoding.UTF8.GetBytes(packet); udp.Send(data, data.Length, server); }
+        catch (Exception e) { Debug.LogWarning("Envio UDP: " + e.Message); }
     }
 
     private void OnDestroy()
     {
         if (playerId >= 0) Send("LEAVE");
-        udp?.Close();
+        if (udp != null) udp.Close();
     }
 }
