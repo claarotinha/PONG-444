@@ -8,6 +8,8 @@ public class PongGameView : MonoBehaviour
     private Transform ball;
     private readonly Transform[] paddles = new Transform[4];
     private GUIStyle title, label;
+    private Transform ballHalo;
+    private readonly Transform[] paddleHalos = new Transform[4];
     private string ip = "127.0.0.1";
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -33,11 +35,19 @@ public class PongGameView : MonoBehaviour
         cam.orthographic = true;
         cam.orthographicSize = 5.5f;
         cam.transform.position = new Vector3(0, 0, -10);
-        cam.backgroundColor = Color.black;
+        cam.backgroundColor = new Color(0.035f, 0.055f, 0.10f);
         cam.clearFlags = CameraClearFlags.SolidColor;
-        ball = Create("Bola", new Vector3(0.35f, 0.35f, 1), Color.white);
+        Create("Arena", new Vector3(16.2f, 9f, 1), new Color(0.07f, 0.10f, 0.17f)).position = new Vector3(0, 0, 2);
+        Create("Lado azul", new Vector3(8f, 9f, 1), new Color(0.08f, 0.16f, 0.23f)).position = new Vector3(-4, 0, 1);
+        Create("Lado dourado", new Vector3(8f, 9f, 1), new Color(0.20f, 0.14f, 0.08f)).position = new Vector3(4, 0, 1);
+        ballHalo = Create("Brilho bola", new Vector3(0.52f, 0.52f, 1), new Color(0.2f, 0.65f, 1f, 0.5f));
+        ball = Create("Bola", new Vector3(0.3f, 0.3f, 1), Color.white);
         for (int i = 0; i < 4; i++)
-            paddles[i] = Create("Raquete " + (i + 1), new Vector3(0.25f, 1.4f, 1), i < 2 ? Color.cyan : Color.yellow);
+        {
+            Color team = i < 2 ? new Color(0.1f, 0.8f, 1f) : new Color(1f, 0.7f, 0.15f);
+            paddleHalos[i] = Create("Brilho raquete " + (i + 1), new Vector3(0.39f, 1.54f, 1), team * 0.55f);
+            paddles[i] = Create("Raquete " + (i + 1), new Vector3(0.25f, 1.4f, 1), team);
+        }
         Create("Parede superior", new Vector3(16.4f, 0.12f, 1), Color.gray).position = new Vector3(0, 4.6f, 0);
         Create("Parede inferior", new Vector3(16.4f, 0.12f, 1), Color.gray).position = new Vector3(0, -4.6f, 0);
         for (int i = -4; i <= 4; i++)
@@ -54,6 +64,8 @@ public class PongGameView : MonoBehaviour
         SpriteRenderer renderer = obj.AddComponent<SpriteRenderer>();
         renderer.sprite = square;
         renderer.color = color;
+        renderer.sortingOrder = name == "Arena" || name.StartsWith("Lado") ? -10
+            : name.StartsWith("Brilho") ? 0 : 1;
         obj.transform.localScale = scale;
         return obj.transform;
     }
@@ -62,8 +74,12 @@ public class PongGameView : MonoBehaviour
     {
         if (client == null) { client = FindFirstObjectByType<PongUdpClient>(); return; }
         ball.position = new Vector3(client.ballPosition.x, client.ballPosition.y, 0);
+        ballHalo.position = ball.position;
         for (int i = 0; i < 4; i++)
+        {
             paddles[i].position = new Vector3(i < 2 ? -7.4f : 7.4f, client.paddlePositions[i], 0);
+            paddleHalos[i].position = paddles[i].position;
+        }
     }
 
     private void OnGUI()
@@ -75,8 +91,10 @@ public class PongGameView : MonoBehaviour
         bool waiting = client.matchStatus == "WAITING";
         bool connecting = client.matchStatus == "CONNECTING";
 
-        GUI.Label(new Rect(w / 2 - 180, 5, 360, 40),
-            client.leftScore + "     x     " + client.rightScore, title);
+        GUI.Label(new Rect(w / 2 - 230, 5, 120, 35), "AZUL", label);
+        GUI.Label(new Rect(w / 2 + 110, 5, 120, 35), "DOURADO", label);
+        GUI.Label(new Rect(w / 2 - 110, 5, 220, 40),
+            client.leftScore + "    :    " + client.rightScore, title);
 
         if (playing)
         {
