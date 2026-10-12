@@ -1,32 +1,29 @@
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using UnityEngine;
 
-// Servidor autoritativo. Execute SOMENTE no projeto PongServidor.
 public class PongUdpServer : MonoBehaviour
 {
     public int port = 7777;
-    public float paddleSpeed = 6f, ballSpeed = 5f;
     public float fieldHalfWidth = 8f, fieldHalfHeight = 4.5f;
-    public float paddleHalfHeight = 0.8f;
+    public float paddleSpeed = 6f, paddleHalfHeight = 0.7f, ballSpeed = 5f;
     public int winningScore = 5;
+    public float disconnectSeconds = 8f;
+    public bool allowLocalTest = true;
 
     private UdpClient udp;
     private readonly IPEndPoint[] peers = new IPEndPoint[4];
-    private readonly float[] paddleY = new float[4];
-    private readonly int[] directions = new int[4];
-    private readonly float[] lastSeen = new float[4];
-    private readonly int[] score = new int[2];
+    private readonly float[] y = new float[4], seen = new float[4];
+    private readonly int[] input = new int[4], scores = new int[2];
+    private readonly string[] tokens = new string[4];
     private Vector2 ball, velocity;
-    private bool running, finished;
-    private float nextSnapshot, nextRound;
-    private readonly CultureInfo ci = CultureInfo.InvariantCulture;
-    private const float Tick = 1f / 30f;
-    private float accumulator;
+    private bool playing, finished;
+    private float nextRound, nextBroadcast, accumulator;
+    private readonly CultureInfo culture = CultureInfo.InvariantCulture;
+    private const float StepSeconds = 1f / 30f;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Boot()
@@ -37,9 +34,14 @@ public class PongUdpServer : MonoBehaviour
 
     private void Start()
     {
-        try { udp = new UdpClient(port); udp.Client.Blocking = false; Debug.Log("SERVIDOR UDP iniciado na porta " + port); }
-        catch (Exception ex) { Debug.LogError("Falha ao abrir porta UDP: " + ex.Message); enabled = false; }
-        ResetBall(1);
+        try
+        {
+            udp = new UdpClient(new IPEndPoint(IPAddress.Any, port));
+            udp.Client.Blocking = false;
+            Debug.Log("Servidor UDP ativo em 0.0.0.0:" + port);
+        }
+        catch (Exception e) { Debug.LogError(e.Message); enabled = false; return; }
+        ResetMatch();
     }
 
     private void Update()
@@ -49,68 +51,90 @@ public class PongUdpServer : MonoBehaviour
         {
             try
             {
-                IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
-                string message = Encoding.UTF8.GetString(udp.Receive(ref remote));
-                Receive(message, remote);
+                IPEndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                Handle(Encoding.UTF8.GetString(udp.Receive(ref from)), from);
             }
-            catch (SocketException) { break; }
-            catch (Exception ex) { Debug.LogWarning("Pacote descartado: " + ex.Message); }
+            catch (Exception e) { Debug.LogWarning("Pacote ignorado: " + e.Message); }
         }
         for (int i = 0; i < 4; i++)
-            if (peers[i] != null && Time.realtimeSinceStartup - lastSeen[i] > 8f) Disconnect(i);
+            if (peers[i] != null && Time.realtimeSinceStartup - seen[i] > disconnectSeconds)
+                Remove(i);
         accumulator = Mathf.Min(accumulator + Time.deltaTime, 0.25f);
-        while (accumulator >= Tick) { Step(Tick); accumulator -= Tick; }
-        if (Time.realtimeSinceStartup >= nextSnapshot)
+        while (accumulator >= StepSeconds) { Simulate(StepSeconds); accumulator -= StepSeconds; }
+        if (Time.realtimeSinceStartup >= nextBroadcast)
         {
-            BroadcastSnapshot();
-            nextSnapshot = Time.realtimeSinceStartup + 0.05f;
+            Broadcast(State());
+            nextBroadcast = Time.realtimeSinceStartup + 0.05f;
         }
     }
 
-    private int Find(IPEndPoint remote)
+    private int Find(IPEndPoint endpoint)
     {
-        for (int i = 0; i < 4; i++) if (peers[i] != null && peers[i].Equals(remote)) return i;
+        for (int i = 0; i < 4; i++) if (peers[i] != null && peers[i].Equals(endpoint)) return i;
         return -1;
     }
 
     private int Count()
     {
-        int total = 0; foreach (var p in peers) if (p != null) total++;
-        return total;
+        int count = 0;
+        foreach (IPEndPoint p in peers) if (p != null) count++;
+        return count;
     }
 
-    private void Receive(string message, IPEndPoint remote)
+    private void Handle(string packet, IPEndPoint from)
     {
-        if (message.Length > 128) return;
-        string[] parts = message.Trim().Split('|');
-        int id = Find(remote);
+        if (packet.Length > 256) return;
+        string[] parts = packet.Trim().Split('|');
+        int id = Find(from);
         if (parts[0] == "JOIN")
         {
+            if (parts.Length != 2 || parts[1].Length < 8 || parts[1].Length > 64) return;
+            string token = parts[1];
+            // Um cliente pode reconectar em outra porta sem ocupar um quinto slot.
+            if (id < 0)
+                for (int i = 0; i < 4; i++)
+                    if (peers[i] != null && tokens[i] == token) { id = i; peers[i] = from; break; }
             if (id < 0)
             {
-                if (running || finished) { Send(remote, "DENY|MATCH_STARTED"); return; }
-                for (int i = 0; i < 4; i++) if (peers[i] == null) { id = i; peers[i] = remote; break; }
-                if (id < 0) { Send(remote, "DENY|FULL"); return; }
-                Debug.Log("Jogador " + (id + 1) + " entrou: " + remote);
+                if (playing || finished) { Send(from, "DENY|IN_PROGRESS"); return; }
+                for (int i = 0; i < 4; i++)
+                    if (peers[i] == null) { id = i; peers[i] = from; tokens[i] = token; break; }
             }
-            lastSeen[id] = Time.realtimeSinceStartup;
-            Send(remote, "WELCOME|" + id);
-            if (Count() == 4 && !running) { running = true; nextRound = Time.realtimeSinceStartup + 1.5f; Debug.Log("Partida iniciada!"); }
+            if (id < 0) { Send(from, "DENY|FULL"); return; }
+            seen[id] = Time.realtimeSinceStartup;
+            Send(from, "WELCOME|" + id);
+            if (!playing && !finished && Count() == 4) StartMatch();
             return;
         }
         if (id < 0) return;
-        lastSeen[id] = Time.realtimeSinceStartup;
+        seen[id] = Time.realtimeSinceStartup;
         if (parts[0] == "INPUT" && parts.Length == 2 && int.TryParse(parts[1], out int dir))
-            directions[id] = Mathf.Clamp(dir, -1, 1);
-        if (parts[0] == "LEAVE") Disconnect(id);
+            input[id] = Mathf.Clamp(dir, -1, 1);
+        if (parts[0] == "RESTART" && finished) { ResetMatch(); if (Count() == 4) StartMatch(); }
+        if (parts[0] == "LEAVE") Remove(id);
     }
 
-    private void Disconnect(int id)
+    private void Remove(int id)
     {
-        Debug.Log("Jogador " + (id + 1) + " desconectado; aguardando nova sala.");
-        peers[id] = null; directions[id] = 0; paddleY[id] = 0f;
-        running = false; finished = false; score[0] = score[1] = 0;
+        peers[id] = null; tokens[id] = null; input[id] = 0;
+        Debug.Log("Jogador " + (id + 1) + " saiu. Sala reiniciada.");
+        ResetMatch();
+        if (Count() == 4) StartMatch();
+    }
+
+    private void ResetMatch()
+    {
+        playing = false; finished = false;
+        scores[0] = scores[1] = 0;
+        for (int i = 0; i < 4; i++) { input[i] = 0; y[i] = i % 2 == 0 ? 2f : -2f; }
         ResetBall(1);
+    }
+
+    private void StartMatch()
+    {
+        playing = true; finished = false;
+        nextRound = Time.realtimeSinceStartup + 1.5f;
+        Debug.Log("Partida iniciada: 4 jogadores.");
     }
 
     private void ResetBall(int direction)
@@ -120,63 +144,64 @@ public class PongUdpServer : MonoBehaviour
         nextRound = Time.realtimeSinceStartup + 1f;
     }
 
-    private void Step(float dt)
+    private void Simulate(float dt)
     {
-        if (!running || finished) return;
+        if (!playing || finished) return;
         for (int i = 0; i < 4; i++)
-            paddleY[i] = Mathf.Clamp(paddleY[i] + directions[i] * paddleSpeed * dt,
-                -fieldHalfHeight + paddleHalfHeight, fieldHalfHeight - paddleHalfHeight);
+        {
+            bool upper = i % 2 == 0;
+            float min = upper ? paddleHalfHeight : -fieldHalfHeight + paddleHalfHeight;
+            float max = upper ? fieldHalfHeight - paddleHalfHeight : -paddleHalfHeight;
+            y[i] = Mathf.Clamp(y[i] + input[i] * paddleSpeed * dt, min, max);
+        }
         if (Time.realtimeSinceStartup < nextRound) return;
-        Vector2 previous = ball;
         ball += velocity * dt;
-        if (ball.y >= fieldHalfHeight - 0.2f) { ball.y = fieldHalfHeight - 0.2f; velocity.y = -Mathf.Abs(velocity.y); }
-        if (ball.y <= -fieldHalfHeight + 0.2f) { ball.y = -fieldHalfHeight + 0.2f; velocity.y = Mathf.Abs(velocity.y); }
-        // Duas raquetes por lado: jogadores 0/1 à esquerda, 2/3 à direita.
-        bool left = velocity.x < 0 && previous.x > -fieldHalfWidth + 0.6f && ball.x <= -fieldHalfWidth + 0.6f;
-        bool right = velocity.x > 0 && previous.x < fieldHalfWidth - 0.6f && ball.x >= fieldHalfWidth - 0.6f;
+        float ceiling = fieldHalfHeight - 0.2f;
+        if (ball.y >= ceiling) { ball.y = ceiling; velocity.y = -Mathf.Abs(velocity.y); }
+        if (ball.y <= -ceiling) { ball.y = -ceiling; velocity.y = Mathf.Abs(velocity.y); }
+        bool left = velocity.x < 0 && ball.x <= -fieldHalfWidth + 0.6f;
+        bool right = velocity.x > 0 && ball.x >= fieldHalfWidth - 0.6f;
         if (left || right)
         {
             int start = left ? 0 : 2;
             for (int i = start; i < start + 2; i++)
-                if (Mathf.Abs(ball.y - paddleY[i]) <= paddleHalfHeight + 0.2f)
-                {
-                    ball.x = left ? -fieldHalfWidth + 0.6f : fieldHalfWidth - 0.6f;
-                    float offset = (ball.y - paddleY[i]) / paddleHalfHeight;
-                    velocity = new Vector2(left ? 1f : -1f, offset * 0.7f).normalized * ballSpeed;
-                    return;
-                }
+            {
+                if (Mathf.Abs(ball.y - y[i]) > paddleHalfHeight + 0.2f) continue;
+                ball.x = left ? -fieldHalfWidth + 0.6f : fieldHalfWidth - 0.6f;
+                velocity = new Vector2(left ? 1f : -1f, (ball.y - y[i]) / paddleHalfHeight * 0.7f).normalized * ballSpeed;
+                return;
+            }
         }
         if (ball.x < -fieldHalfWidth || ball.x > fieldHalfWidth)
         {
             int winner = ball.x < 0 ? 1 : 0;
-            score[winner]++;
-            Debug.Log("Ponto! " + score[0] + " x " + score[1]);
-            if (score[winner] >= winningScore) { finished = true; Broadcast("END|" + winner); }
+            scores[winner]++;
+            Debug.Log("Placar: " + scores[0] + " x " + scores[1]);
+            if (scores[winner] >= winningScore)
+            {
+                playing = false; finished = true;
+                Broadcast("END|" + winner);
+            }
             else ResetBall(winner == 0 ? -1 : 1);
         }
     }
 
-    private string F(float value) { return value.ToString("0.000", ci); }
-
-    private void BroadcastSnapshot()
+    private string F(float n) { return n.ToString("0.000", culture); }
+    private string State()
     {
-        string status = finished ? "FINISHED" : running ? "PLAYING" : "WAITING";
-        string packet = "STATE|" + status + "|" + Count() + "|" + F(ball.x) + "|" + F(ball.y)
-            + "|" + F(paddleY[0]) + "|" + F(paddleY[1]) + "|" + F(paddleY[2]) + "|" + F(paddleY[3])
-            + "|" + score[0] + "|" + score[1];
-        Broadcast(packet);
+        return "STATE|" + (finished ? "FINISHED" : playing ? "PLAYING" : "WAITING") + "|" + Count()
+            + "|" + F(ball.x) + "|" + F(ball.y)
+            + "|" + F(y[0]) + "|" + F(y[1]) + "|" + F(y[2]) + "|" + F(y[3])
+            + "|" + scores[0] + "|" + scores[1];
     }
-
-    private void Broadcast(string message)
+    private void Broadcast(string packet)
     {
-        foreach (var peer in peers) if (peer != null) Send(peer, message);
+        foreach (IPEndPoint p in peers) if (p != null) Send(p, packet);
     }
-
-    private void Send(IPEndPoint remote, string message)
+    private void Send(IPEndPoint peer, string packet)
     {
-        try { byte[] data = Encoding.UTF8.GetBytes(message); udp.Send(data, data.Length, remote); }
-        catch (Exception ex) { Debug.LogWarning("Erro de envio UDP: " + ex.Message); }
+        try { byte[] data = Encoding.UTF8.GetBytes(packet); udp.Send(data, data.Length, peer); }
+        catch (Exception e) { Debug.LogWarning("Falha UDP: " + e.Message); }
     }
-
-    private void OnDestroy() { udp?.Close(); }
+    private void OnDestroy() { if (udp != null) udp.Close(); }
 }
