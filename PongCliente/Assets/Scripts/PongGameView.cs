@@ -13,10 +13,14 @@ public class PongGameView : MonoBehaviour
     private GUIStyle heading, textStyle, scoreStyle;
     private string ip = "127.0.0.1";
     private bool ipLoaded;
+    private Vector2 smoothBall;
+    private readonly float[] smoothPaddles = { 2f, -2f, 2f, -2f };
+    private bool positionsInitialized;
     private static readonly Color Blue = new Color(0.12f, 0.82f, 1f);
     private static readonly Color Gold = new Color(1f, 0.72f, 0.22f);
 
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    // Substituido pelo Canvas da cena; mantido apenas como referencia.
+    // [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Boot()
     {
         if (FindFirstObjectByType<PongGameView>() == null)
@@ -87,18 +91,25 @@ public class PongGameView : MonoBehaviour
 
     private void Update()
     {
-        FitCamera();
         if (client == null) client = FindFirstObjectByType<PongUdpClient>();
         if (client == null) return;
         if (!ipLoaded) { ip = client.serverIp; ipLoaded = true; }
-        if (ball != null)
-            ball.position = new Vector3(client.ballPosition.x, client.ballPosition.y, 0);
+        if (!positionsInitialized && client.playerId >= 0)
+        {
+            smoothBall = client.ballPosition;
+            for (int j = 0; j < 4; j++) smoothPaddles[j] = client.paddlePositions[j];
+            positionsInitialized = true;
+        }
+        float blend = 1f - Mathf.Exp(-22f * Time.unscaledDeltaTime);
+        smoothBall = Vector2.Lerp(smoothBall, client.ballPosition, blend);
+        if (ball != null) ball.position = new Vector3(smoothBall.x, smoothBall.y, 0);
         for (int i = 0; i < 4; i++)
         {
             if (paddles[i] == null || highlights[i] == null) continue;
             float y = client.playerId >= 0 && client.paddlePositions != null && client.paddlePositions.Length == 4
                 ? client.paddlePositions[i] : (i % 2 == 0 ? 2f : -2f);
-            Vector3 position = new Vector3(i < 2 ? -7.4f : 7.4f, y, 0);
+            smoothPaddles[i] = Mathf.Lerp(smoothPaddles[i], y, blend);
+            Vector3 position = new Vector3(i < 2 ? -7.4f : 7.4f, smoothPaddles[i], 0);
             paddles[i].position = position;
             highlights[i].position = position;
         }
@@ -130,6 +141,8 @@ public class PongGameView : MonoBehaviour
 
         if (client.matchStatus == "PLAYING")
         {
+            GUI.Label(new Rect(w / 2 - 140, 76, 280, 27),
+                "RODADA " + client.roundNumber + (client.roundPaused ? " - PREPARE-SE" : ""), textStyle);
             GUI.Label(new Rect(w / 2 - 260, 45, 520, 28),
                 "Jogador " + (client.playerId + 1) + " - Equipe " +
                 (client.playerId < 2 ? "AZUL" : "DOURADA") + " | W/S ou setas", textStyle);

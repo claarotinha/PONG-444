@@ -14,7 +14,8 @@ public class PongUdpClient : MonoBehaviour
     public int serverPort = 7777;
     public int playerId = -1;
     public string matchStatus = "CONNECTING";
-    public int connectedPlayers, leftScore, rightScore;
+    public int connectedPlayers, leftScore, rightScore, roundNumber;
+    public bool roundPaused;
     public Vector2 ballPosition;
     public float[] paddlePositions = new float[4];
     public bool useKeyboard = true;
@@ -37,6 +38,9 @@ public class PongUdpClient : MonoBehaviour
 
     private void Start()
     {
+        Application.runInBackground = true;
+        QualitySettings.vSyncCount = 0;
+        Application.targetFrameRate = 60;
         sessionToken = Guid.NewGuid().ToString("N");
         try
         {
@@ -74,7 +78,7 @@ public class PongUdpClient : MonoBehaviour
         if (playerId >= 0 && Time.realtimeSinceStartup >= nextInput)
         {
             Send("INPUT|" + Direction());
-            nextInput = Time.realtimeSinceStartup + 0.05f;
+            nextInput = Time.realtimeSinceStartup + 1f / 30f;
         }
     }
 
@@ -120,7 +124,7 @@ public class PongUdpClient : MonoBehaviour
             Debug.Log("Equipe vencedora: " + (p[1] == "0" ? "esquerda" : "direita"));
             return;
         }
-        if (p[0] != "STATE" || p.Length != 11) return;
+        if (p[0] != "STATE" || p.Length != 13) return;
         if (!int.TryParse(p[2], out int count) ||
             !float.TryParse(p[3], NumberStyles.Float, culture, out float bx) ||
             !float.TryParse(p[4], NumberStyles.Float, culture, out float by)) return;
@@ -128,6 +132,9 @@ public class PongUdpClient : MonoBehaviour
         for (int i = 0; i < 4; i++)
             if (!float.TryParse(p[5 + i], NumberStyles.Float, culture, out positions[i])) return;
         if (!int.TryParse(p[9], out int a) || !int.TryParse(p[10], out int b)) return;
+        if (!int.TryParse(p[11], out int round)) return;
+        roundNumber = round;
+        roundPaused = p[12] == "PAUSE";
         matchStatus = p[1]; connectedPlayers = count;
         ballPosition = new Vector2(bx, by);
         Array.Copy(positions, paddlePositions, 4);
@@ -153,6 +160,8 @@ public class PongUdpClient : MonoBehaviour
         playerId = -1;
         matchStatus = "CONNECTING";
         connectedPlayers = 0;
+        leftScore = rightScore = roundNumber = 0;
+        roundPaused = false;
         lastPacket = Time.realtimeSinceStartup;
         nextJoin = 0f;
         Debug.Log("Conectando a " + server);

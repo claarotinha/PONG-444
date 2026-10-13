@@ -23,7 +23,8 @@ public class PongUdpServer : MonoBehaviour
     private bool playing, finished;
     private float nextRound, nextBroadcast, accumulator;
     private readonly CultureInfo culture = CultureInfo.InvariantCulture;
-    private const float StepSeconds = 1f / 30f;
+    private const float StepSeconds = 1f / 60f;
+    private int roundNumber;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Boot()
@@ -34,6 +35,9 @@ public class PongUdpServer : MonoBehaviour
 
     private void Start()
     {
+        Application.runInBackground = true;
+        QualitySettings.vSyncCount = 0;
+        Application.targetFrameRate = 60;
         try
         {
             udp = new UdpClient(new IPEndPoint(IPAddress.Any, port));
@@ -64,7 +68,7 @@ public class PongUdpServer : MonoBehaviour
         if (Time.realtimeSinceStartup >= nextBroadcast)
         {
             Broadcast(State());
-            nextBroadcast = Time.realtimeSinceStartup + 0.05f;
+            nextBroadcast = Time.realtimeSinceStartup + 1f / 30f;
         }
     }
 
@@ -125,6 +129,7 @@ public class PongUdpServer : MonoBehaviour
     private void ResetMatch()
     {
         playing = false; finished = false;
+        roundNumber = 0;
         scores[0] = scores[1] = 0;
         for (int i = 0; i < 4; i++) { input[i] = 0; y[i] = i % 2 == 0 ? 2f : -2f; }
         ResetBall(1);
@@ -133,6 +138,7 @@ public class PongUdpServer : MonoBehaviour
     private void StartMatch()
     {
         playing = true; finished = false;
+        roundNumber = 1;
         nextRound = Time.realtimeSinceStartup + 1.5f;
         Debug.Log("Partida iniciada: 4 jogadores.");
     }
@@ -182,7 +188,7 @@ public class PongUdpServer : MonoBehaviour
                 playing = false; finished = true;
                 Broadcast("END|" + winner);
             }
-            else ResetBall(winner == 0 ? -1 : 1);
+            else { roundNumber++; ResetBall(winner == 0 ? -1 : 1); }
         }
     }
 
@@ -192,7 +198,7 @@ public class PongUdpServer : MonoBehaviour
         return "STATE|" + (finished ? "FINISHED" : playing ? "PLAYING" : "WAITING") + "|" + Count()
             + "|" + F(ball.x) + "|" + F(ball.y)
             + "|" + F(y[0]) + "|" + F(y[1]) + "|" + F(y[2]) + "|" + F(y[3])
-            + "|" + scores[0] + "|" + scores[1];
+            + "|" + scores[0] + "|" + scores[1] + "|" + roundNumber + "|" + (playing && Time.realtimeSinceStartup < nextRound ? "PAUSE" : "LIVE");
     }
     private void Broadcast(string packet)
     {
