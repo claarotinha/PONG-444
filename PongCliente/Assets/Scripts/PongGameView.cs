@@ -19,7 +19,8 @@ public class PongGameView : MonoBehaviour
     private static readonly Color Blue = new Color(0.12f, 0.82f, 1f);
     private static readonly Color Gold = new Color(1f, 0.72f, 0.22f);
 
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    // Substituido pelo Canvas da cena; mantido apenas como referencia.
+    // [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Boot()
     {
         if (FindFirstObjectByType<PongGameView>() == null)
