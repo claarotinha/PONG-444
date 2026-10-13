@@ -7,8 +7,28 @@ using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
 
 // Ferramenta do Editor: cria objetos reais na Hierarchy, não via OnGUI.
+[InitializeOnLoad]
 public static class PongSceneBuilder
 {
+    static PongSceneBuilder()
+    {
+        EditorSceneManager.sceneOpened += OnSceneOpened;
+        EditorApplication.delayCall += EnsureScene;
+    }
+
+    private static void OnSceneOpened(Scene scene, OpenSceneMode mode)
+    {
+        if (scene.path == ScenePath) EditorApplication.delayCall += EnsureScene;
+    }
+
+    private static void EnsureScene()
+    {
+        if (EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isCompiling) return;
+        Scene scene = EditorSceneManager.GetActiveScene();
+        if (scene.path != ScenePath || GameObject.Find("Canvas") != null) return;
+        Build();
+    }
+
     private const string ScenePath = "Assets/Scenes/SampleScene.unity";
 
     [MenuItem("Pong/Montar Canvas")]
@@ -41,8 +61,9 @@ public static class PongSceneBuilder
 #else
         events.AddComponent<StandaloneInputModule>();
 #endif
-        PongCanvasUI ui = new GameObject("Pong UI").AddComponent<PongCanvasUI>();
-        ui.transform.SetParent(canvasObject.transform, false);
+        GameObject uiObject = new GameObject("Pong UI", typeof(RectTransform));
+        uiObject.transform.SetParent(canvasObject.transform, false);
+        PongCanvasUI ui = uiObject.AddComponent<PongCanvasUI>();
         ui.client = network.GetComponent<PongUdpClient>();
 
         Panel(canvasObject.transform, "Campo", new Vector2(820, 450), new Vector2(0, -25),
